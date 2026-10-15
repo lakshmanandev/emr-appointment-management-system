@@ -1,4 +1,6 @@
 import express from 'express';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import helmet from 'helmet';
 import cors from 'cors';
 import cookieParser from 'cookie-parser';
@@ -26,6 +28,14 @@ app.use('/api/v1/appointments', appointmentRouter);
 app.use('/api/v1/doctors', doctorRouter);
 app.use('/api/v1/dashboard', dashboardRouter);
 app.use('/api/v1/admin', adminRouter);
+if (env.NODE_ENV === 'production') {
+  const clientDist = resolve(dirname(fileURLToPath(import.meta.url)), '../../client/dist');
+  app.use(express.static(clientDist, { index: false }));
+  app.get(/^\/(?!api(?:\/|$))[^.]*$/, (req, res, next) => {
+    if (!req.accepts('html')) return next();
+    res.sendFile(resolve(clientDist, 'index.html'), (error) => { if (error) next(); });
+  });
+}
 app.use(notFoundHandler);
 app.use(errorHandler);
 export default app;

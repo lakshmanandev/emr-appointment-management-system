@@ -1,0 +1,201 @@
+openapi: 3.0.3
+info:
+  title: Careflow EMR Appointment API
+  version: 1.0.0
+  description: Appointment scheduling API. See API.md for examples and workflow rules.
+servers:
+  - url: http://localhost:4000/api/v1
+paths:
+  /health:
+    get:
+      summary: Health check
+      responses:
+        '200': { description: API is healthy }
+  /auth/login:
+    post:
+      summary: Authenticate with email and password
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties: { email: { type: string, format: email }, password: { type: string, format: password } }
+      responses:
+        '200': { description: Access token returned and refresh cookie set }
+        '401': { description: Invalid credentials }
+        '429': { description: Login rate limit exceeded }
+  /auth/refresh:
+    post:
+      summary: Rotate refresh cookie and issue access token
+      responses: { '200': { description: Rotated tokens }, '401': { description: Invalid refresh session } }
+  /auth/logout:
+    post:
+      summary: Revoke refresh session
+      responses: { '200': { description: Logged out } }
+  /doctors:
+    get:
+      security: [{ bearerAuth: [] }]
+      summary: List active doctors
+      responses: { '200': { description: Doctor list } }
+  /doctors/departments:
+    get:
+      security: [{ bearerAuth: [] }]
+      summary: List active departments
+      responses: { '200': { description: Department list } }
+  /doctors/{id}/schedule:
+    parameters: [{ in: path, name: id, required: true, schema: { type: string } }]
+    put:
+      security: [{ bearerAuth: [] }]
+      summary: Replace the doctor's weekly schedule (super admin)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [schedule]
+              properties:
+                timezone: { type: string, example: Asia/Kolkata }
+                schedule:
+                  type: array
+                  items:
+                    type: object
+                    required: [dayOfWeek, sessions]
+                    properties:
+                      dayOfWeek: { type: integer, minimum: 0, maximum: 6 }
+                      sessions:
+                        type: array
+                        items:
+                          type: object
+                          required: [start, end, slotMinutes]
+                          properties:
+                            start: { type: string, pattern: '^([01][0-9]|2[0-3]):[0-5][0-9]$' }
+                            end: { type: string, pattern: '^([01][0-9]|2[0-3]):[0-5][0-9]$' }
+                            slotMinutes: { type: integer, minimum: 5, maximum: 240 }
+                            breaks: { type: array, items: { type: object, properties: { start: { type: string }, end: { type: string } } } }
+      responses: { '200': { description: Updated schedule }, '400': { description: Invalid sessions or breaks }, '403': { description: Super admin required }, '409': { description: Update would invalidate an upcoming reservation } }
+  /doctors/slots:
+    get:
+      security: [{ bearerAuth: [] }]
+      summary: List available schedule slots
+      parameters:
+        - { in: query, name: doctorId, required: true, schema: { type: string } }
+        - { in: query, name: departmentId, required: true, schema: { type: string } }
+        - { in: query, name: date, required: true, schema: { type: string, format: date } }
+      responses: { '200': { description: Slot list }, '400': { description: Invalid or past date } }
+  /appointments:
+    get:
+      security: [{ bearerAuth: [] }]
+      summary: Search appointments
+      parameters:
+        - { in: query, name: page, schema: { type: integer, minimum: 1, default: 1 } }
+        - { in: query, name: limit, schema: { type: integer, minimum: 1, maximum: 100, default: 10 } }
+        - { in: query, name: status, schema: { type: string, enum: [SCHEDULED, ARRIVED, COMPLETED, CANCELLED] } }
+      responses: { '200': { description: Appointment page } }
+    post:
+      security: [{ bearerAuth: [] }]
+      summary: Book a schedule slot
+      description: Receptionist or super admin. Slot ownership enforced by unique reservation index.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [doctorId, departmentId, startAt, endAt]
+              properties:
+                patientId: { type: string }
+                newPatient: { type: object }
+                doctorId: { type: string }
+                departmentId: { type: string }
+                startAt: { type: string, format: date-time }
+                endAt: { type: string, format: date-time }
+                purpose: { type: string }
+      responses: { '201': { description: Appointment created }, '409': { description: Slot conflict } }
+  /appointments/{id}:
+    parameters: [{ in: path, name: id, required: true, schema: { type: string } }]
+    get:
+      security: [{ bearerAuth: [] }]
+      summary: Get appointment
+      responses: { '200': { description: Appointment }, '403': { description: Not the assigned doctor } }
+    put:
+      security: [{ bearerAuth: [] }]
+      summary: Update appointment fields or reschedule a scheduled appointment
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                purpose: { type: string, maxLength: 500 }
+                notes: { type: string, maxLength: 5000 }
+                startAt: { type: string, format: date-time }
+                endAt: { type: string, format: date-time }
+      responses: { '200': { description: Updated appointment } }
+    delete:
+      security: [{ bearerAuth: [] }]
+      summary: Cancel appointment (record retained)
+      requestBody:
+        content:
+          application/json:
+            schema: { type: object, properties: { reason: { type: string, maxLength: 500 } } }
+      responses: { '200': { description: Cancelled }, '403': { description: Receptionist or super admin required }, '409': { description: Schedule conflict }, '422': { description: Invalid workflow transition } }
+  /appointments/{id}/arrive:
+    post:
+      security: [{ bearerAuth: [] }]
+      summary: Mark scheduled appointment arrived
+      responses: { '200': { description: Arrived } }
+  /appointments/{id}/complete:
+    post:
+      security: [{ bearerAuth: [] }]
+      summary: Doctor marks arrived appointment completed
+      responses: { '200': { description: Completed } }
+  /dashboard:
+    get:
+      security: [{ bearerAuth: [] }]
+      summary: Role-scoped today's appointment counts
+      responses: { '200': { description: Status counts for the signed-in user's allowed appointments } }
+  /admin/departments:
+    post:
+      security: [{ bearerAuth: [] }]
+      summary: Create a department (super admin)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [name], properties: { name: { type: string, minLength: 2, maxLength: 100 }, description: { type: string, maxLength: 500 } } }
+      responses: { '201': { description: Department created }, '403': { description: Super admin required } }
+  /admin/doctors:
+    get:
+      security: [{ bearerAuth: [] }]
+      summary: List doctor profiles for super-admin management
+      responses: { '200': { description: Bounded doctor roster including schedule configuration } }
+    post:
+      security: [{ bearerAuth: [] }]
+      summary: Create doctor login and profile (super admin)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [name, email, password, code, departmentId, specialization], properties: { name: { type: string }, email: { type: string, format: email }, password: { type: string, minLength: 12, format: password }, code: { type: string }, departmentId: { type: string }, specialization: { type: string }, timezone: { type: string } } }
+      responses: { '201': { description: Doctor created }, '409': { description: Email or doctor code already exists } }
+  /admin/receptionists:
+    get:
+      security: [{ bearerAuth: [] }]
+      summary: List receptionist accounts for super-admin management
+      responses: { '200': { description: Bounded receptionist roster } }
+    post:
+      security: [{ bearerAuth: [] }]
+      summary: Create receptionist account (super admin)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [name, email, password], properties: { name: { type: string }, email: { type: string, format: email }, password: { type: string, minLength: 12, format: password } } }
+      responses: { '201': { description: Receptionist created }, '409': { description: Email already exists } }
+components:
+  securitySchemes:
+    bearerAuth: { type: http, scheme: bearer, bearerFormat: JWT }
